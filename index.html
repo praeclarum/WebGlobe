@@ -1,0 +1,16 @@
+<html>
+<head>
+    <title>My First Web Globe Page</title>
+    <script src="hellotri.js"></script>
+</head>
+<body>
+    <canvas id="globeCanvas" width="800" height="600"></canvas>
+    <script>
+        const $globeCanvas = document.getElementById('globeCanvas');
+        async function startAsync() {
+            await hellotriInit($globeCanvas);
+        }
+        startAsync();
+    </script>
+</body>
+</html>
