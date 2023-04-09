@@ -38,7 +38,7 @@ const hellotriInit = async (canvas) => {
       ],
     },
     primitive: {
-      topology: 'triangle-list',
+      topology: 'line-list',
     },
   });
 
@@ -59,7 +59,7 @@ const hellotriInit = async (canvas) => {
 
     const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
     passEncoder.setPipeline(pipeline);
-    passEncoder.draw(3, 1, 0, 0);
+    passEncoder.draw(6, 1, 0, 0);
     passEncoder.end();
 
     device.queue.submit([commandEncoder.finish()]);
