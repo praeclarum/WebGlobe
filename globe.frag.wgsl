@@ -1,7 +1,25 @@
+struct Uniforms {
+  modelViewMatrix : mat4x4<f32>,
+  projectionMatrix : mat4x4<f32>,
+  normModelViewMatrix : mat4x4<f32>,
+}
+@binding(0) @group(0) var<uniform> uniforms : Uniforms;
+
 @fragment
 fn main(
-  @location(0) fragPosition: vec4<f32>
+  @location(0) modelPosition: vec4<f32>
 ) -> @location(0) vec4<f32> {
-//   return fragPosition;
-  return vec4<f32>(0.0, 1.0, 0.0, 1.0);
+  var viewPosition: vec3<f32> = (uniforms.modelViewMatrix * modelPosition).xyz;
+  var modelNormal: vec4<f32> = normalize(modelPosition);
+  var viewNormal: vec3<f32> = (uniforms.normModelViewMatrix * modelNormal).xyz;
+  var dirToCamera: vec3<f32> = normalize(vec3<f32>(0.0, 0.0, 0.0) - viewPosition);
+  
+  var brightness: f32 = clamp(dot(viewNormal, dirToCamera), 0, 1);
+  brightness = pow(brightness, 0.75);
+  var ambient: f32 = 0.2;
+  brightness = mix(ambient, 1.0, brightness);
+  // fragPosition is world coordinates
+  // camera is at 0, 0, 0
+  // need a vector from 
+  return vec4<f32>(vec3<f32>(0.2, 1.0, 0.2) * brightness, 1.0);
 }

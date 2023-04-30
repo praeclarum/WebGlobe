@@ -66,8 +66,10 @@ export const init = async (canvas) => {
     const sampleCount = 4;
 
     const devicePixelRatio = window.devicePixelRatio || 1;
-    canvas.width = canvas.clientWidth * devicePixelRatio;
-    canvas.height = canvas.clientHeight * devicePixelRatio;
+    const initWidth = canvas.clientWidth * devicePixelRatio;
+    const initHeight = canvas.clientHeight * devicePixelRatio;
+    canvas.width = initWidth;
+    canvas.height = initHeight;
     const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 
     context.configure({
@@ -126,14 +128,15 @@ export const init = async (canvas) => {
         },
     });
 
-    const uniformBufferSize = 4 * 16; // 4x4 matrix
+    const uniformBufferSize = 3 * (4 * 4 * 4); // 2 4x4 matrices
     const uniformBuffer = device.createBuffer({
         size: uniformBufferSize,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
+    const bindGroup0UniformLayout = pipeline.getBindGroupLayout(0);
     const uniformBindGroup = device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
+        layout: bindGroup0UniformLayout,
         entries: [
             {
                 binding: 0,
@@ -148,7 +151,6 @@ export const init = async (canvas) => {
         colorAttachments: [
             {
                 view: undefined, // Assigned later
-
                 clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
                 loadOp: "clear",
                 storeOp: "store",
@@ -166,22 +168,13 @@ export const init = async (canvas) => {
     function getTransformationMatrix(t) {
         const viewMatrix = mat4.create();
         mat4.translate(viewMatrix, viewMatrix, vec3.fromValues(0, 0, -15));
-        const now = Date.now() / 1000;
         mat4.rotate(
             viewMatrix,
             viewMatrix,
             0.1*t,
             vec3.fromValues(0, 1, 0)
         );
-
-        const aspect = canvas.width / canvas.height;
-        const projectionMatrix = mat4.create();
-        mat4.perspective(projectionMatrix, Math.PI / 20, aspect, 0.1, 100.0);
-    
-        const modelViewProjectionMatrix = mat4.create();
-        mat4.multiply(modelViewProjectionMatrix, projectionMatrix, viewMatrix);
-
-        return modelViewProjectionMatrix;
+        return viewMatrix;
     }
 
     const coastlinesVerticesBuffer = loadShpLineVertices(device, coastlines);
@@ -201,8 +194,8 @@ export const init = async (canvas) => {
         const scaleX = currentWidth > maxTextureSize ? maxTextureSize / currentWidth : 1;
         const scaleY = currentHeight > maxTextureSize ? maxTextureSize / currentHeight : 1;
         const scale = Math.min(scaleX, scaleY);
-        currentWidth *= scale;
-        currentHeight *= scale;
+        currentWidth = Math.round(scale * currentWidth);
+        currentHeight = Math.round(scale * currentHeight);
 
         // The canvas size is animating via CSS.
         // When the size changes, we need to reallocate the render target.
@@ -249,16 +242,45 @@ export const init = async (canvas) => {
     // Start rendering time
     const startTime = Date.now() / 1000;
     
-    function frame() {
+    async function frame() {
         resizeBuffersIfNeeded();
         const t = Date.now() / 1000 - startTime;
-        const transformationMatrix = getTransformationMatrix(t);
+        
+        const aspect = canvas.width / canvas.height;
+        const projectionMatrix = mat4.create();
+        mat4.perspective(projectionMatrix, Math.PI / 20, aspect, 0.1, 100.0);
+        
+        const modelViewMatrix = getTransformationMatrix(t);
+        const normModelViewMatrix = mat4.copy(mat4.create(), modelViewMatrix);
+        normModelViewMatrix[12] = 0;
+        normModelViewMatrix[13] = 0;
+        normModelViewMatrix[14] = 0;
+        mat4.invert(normModelViewMatrix, normModelViewMatrix);
+        mat4.transpose(normModelViewMatrix, normModelViewMatrix);
+
+        const modelViewProjectionMatrix = mat4.create();
+        mat4.multiply(modelViewProjectionMatrix, projectionMatrix, modelViewMatrix);
+    
         device.queue.writeBuffer(
             uniformBuffer,
             0,
-            transformationMatrix.buffer,
-            transformationMatrix.byteOffset,
-            transformationMatrix.byteLength
+            modelViewMatrix,
+            0,
+            16
+        );
+        device.queue.writeBuffer(
+            uniformBuffer,
+            64,
+            projectionMatrix,
+            0,
+            16
+        );
+        device.queue.writeBuffer(
+            uniformBuffer,
+            2*64,
+            normModelViewMatrix,
+            0,
+            16
         );
         renderPassDescriptor.colorAttachments[0].view = renderTargetView;
         renderPassDescriptor.colorAttachments[0].resolveTarget = context.getCurrentTexture().createView();
