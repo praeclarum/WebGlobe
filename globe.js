@@ -2,29 +2,74 @@ import "./gl-matrix.js";
 const mat4 = glMatrix.mat4;
 const vec3 = glMatrix.vec3;
 
-function loadShpLineVertices(device, shp) {
+function sphere2cart(point, aboveSea) {
+    const lngr = (point.Longitude * Math.PI) / 180;
+    const latr = (point.Latitude * Math.PI) / 180;
+    const EarthRadius = 1.0;
+    var clat = Math.cos (latr);
+    var slat = Math.sin (latr);
+    const EarthFlattening = 1.0/298.257223563;
+    const EarthFF = (1.0 - EarthFlattening) * (1.0 - EarthFlattening);
+    var C = 1.0 / (Math.sqrt (clat*clat + EarthFF * slat*slat));
+    var S = C * EarthFF;
+    const x = (EarthRadius * C + aboveSea)*clat * (Math.cos (lngr));
+    const y = (EarthRadius * C + aboveSea)*clat * (Math.sin (lngr));
+    const z = (EarthRadius * S + aboveSea)*slat;
+    return [-x, z, y];
+}
+
+function createLinesBuffer(device, createLines) {
     var vertexArray = [];
-    function addLine(fromPoint, toPoint) {
-        const f = sphere2cart(fromPoint);
-        const t = sphere2cart(toPoint);
+    function addLine(fromPoint, toPoint, aboveSea) {
+        const f = sphere2cart(fromPoint, aboveSea);
+        const t = sphere2cart(toPoint, aboveSea);
         vertexArray.push(f[0], f[1], f[2], 1);
         vertexArray.push(t[0], t[1], t[2], 1);
     }
-    function sphere2cart(point) {
-        const lngr = (point.Longitude * Math.PI) / 180;
-        const latr = (point.Latitude * Math.PI) / 180;
-        const EarthRadius = 1.0;
-        const aboveSea = 0.0;
-        var clat = Math.cos (latr);
-        var slat = Math.sin (latr);
-        const EarthFlattening = 1.0/298.257223563;
-        const EarthFF = (1.0 - EarthFlattening) * (1.0 - EarthFlattening);
-        var C = 1.0 / (Math.sqrt (clat*clat + EarthFF * slat*slat));
-        var S = C * EarthFF;
-        const x = (EarthRadius * C + aboveSea)*clat * (Math.cos (lngr));
-        const y = (EarthRadius * C + aboveSea)*clat * (Math.sin (lngr));
-        const z = (EarthRadius * S + aboveSea)*slat;
-        return [-x, z, y];
+    createLines(addLine)
+    const floatVertexArray = new Float32Array(vertexArray);
+    const verticesBuffer = device.createBuffer({
+        size: floatVertexArray.byteLength,
+        usage: GPUBufferUsage.VERTEX,
+        mappedAtCreation: true,
+    });
+    new Float32Array(verticesBuffer.getMappedRange()).set(floatVertexArray);
+    verticesBuffer.unmap();
+    return verticesBuffer;
+}
+
+function createDebugVertices(device) {
+    return createLinesBuffer(device, addLine => {
+        addLine({ Longitude: 0, Latitude: 90 }, { Longitude: 0, Latitude: -90 }, 1);
+    });
+}
+
+function createLatLngLines(device) {
+    return createLinesBuffer(device, addLine => {
+        const bigSep = 15;
+        const litSep = 1;
+        // Draw lines of latitude
+        for (let lat = -90; lat <= 90; lat += bigSep) {
+            for (let lng = -180; lng <= 180; lng += litSep) {
+                addLine({ Longitude: lng, Latitude: lat }, { Longitude: lng + litSep, Latitude: lat }, 0);
+            }
+        }
+        // Draw lines of longitude
+        for (let lng = -180; lng <= 180; lng += bigSep) {
+            for (let lat = -90; lat <= 90; lat += litSep) {
+                addLine({ Longitude: lng, Latitude: lat }, { Longitude: lng, Latitude: lat + litSep }, 0);
+            }
+        }
+    });
+}
+
+function loadShpLineVertices(device, shp) {
+    var vertexArray = [];
+    function addLine(fromPoint, toPoint) {
+        const f = sphere2cart(fromPoint, 0);
+        const t = sphere2cart(toPoint, 0);
+        vertexArray.push(f[0], f[1], f[2], 1);
+        vertexArray.push(t[0], t[1], t[2], 1);
     }
     for (const record of shp.Records) {
         const points = record.Points;
@@ -52,8 +97,6 @@ function loadShpLineVertices(device, shp) {
 export const init = async (canvas) => {
     const coastlines = await (await fetch("./data/coastlines.json")).json();
     const countries = await (await fetch("./data/countries.json")).json();
-    // import basicVertWGSL from '../../shaders/basic.vert.wgsl';
-    // import vertexPositionColorWGSL from '../../shaders/vertexPositionColor.frag.wgsl';
     const basicVertWGSL = await (await fetch("globe.vert.wgsl")).text();
     const vertexPositionColorWGSL = await (
         await fetch("globe.frag.wgsl")
@@ -168,10 +211,25 @@ export const init = async (canvas) => {
     function getTransformationMatrix(t) {
         const viewMatrix = mat4.create();
         mat4.translate(viewMatrix, viewMatrix, vec3.fromValues(0, 0, -15));
+        const rotationSpeed = 2.0 * Math.PI / (60.0 * 60.0 * 24.0);
+        const axisSpeed = 2.0 * Math.PI / (60.0 * 60.0 * 24.0 * 365.0);
+        const timeSpeedup = 1000.0;
         mat4.rotate(
             viewMatrix,
             viewMatrix,
-            0.1*t,
+            (axisSpeed * timeSpeedup * t) + Math.PI / 2.0,
+            vec3.fromValues(0, 1, 0)
+        );
+        mat4.rotate(
+            viewMatrix,
+            viewMatrix,
+            23.5 * (Math.PI / 180),
+            vec3.fromValues(0, 0, 1)
+        );
+        mat4.rotate(
+            viewMatrix,
+            viewMatrix,
+            rotationSpeed * timeSpeedup * t,
             vec3.fromValues(0, 1, 0)
         );
         return viewMatrix;
@@ -181,6 +239,10 @@ export const init = async (canvas) => {
     const coastlinesVertexCount = coastlinesVerticesBuffer.size / vertexSize;
     const countriesVerticesBuffer = loadShpLineVertices(device, countries);
     const countriesVertexCount = countriesVerticesBuffer.size / vertexSize;
+    const debugVerticesBuffer = createDebugVertices(device);
+    const debugVertexCount = debugVerticesBuffer.size / vertexSize;
+    const latlngVerticesBuffer = createLatLngLines(device);
+    const latlngVertexCount = latlngVerticesBuffer.size / vertexSize;
 
     let renderTarget = undefined;
     let renderTargetView = undefined;
@@ -294,6 +356,10 @@ export const init = async (canvas) => {
         passEncoder.draw(coastlinesVertexCount, 1, 0, 0);
         passEncoder.setVertexBuffer(0, countriesVerticesBuffer);
         passEncoder.draw(countriesVertexCount, 1, 0, 0);
+        passEncoder.setVertexBuffer(0, debugVerticesBuffer);
+        passEncoder.draw(debugVertexCount, 1, 0, 0);
+        passEncoder.setVertexBuffer(0, latlngVerticesBuffer);
+        passEncoder.draw(latlngVertexCount, 1, 0, 0);
         passEncoder.end();
         device.queue.submit([commandEncoder.finish()]);
 
