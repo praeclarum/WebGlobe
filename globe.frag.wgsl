@@ -7,7 +7,8 @@ struct Uniforms {
 
 @fragment
 fn main(
-  @location(0) modelPosition: vec4<f32>
+  @location(0) modelPosition: vec4<f32>,
+  @location(1) color: vec4<f32>
 ) -> @location(0) vec4<f32> {
   var viewPosition: vec3<f32> = (uniforms.modelViewMatrix * modelPosition).xyz;
   var modelNormal: vec4<f32> = normalize(modelPosition);
@@ -16,10 +17,10 @@ fn main(
   
   var brightness: f32 = clamp(dot(viewNormal, dirToCamera), 0, 1);
   brightness = pow(brightness, 0.75);
-  var ambient: f32 = 0.2;
+  var ambient: f32 = 0.333;
   brightness = mix(ambient, 1.0, brightness);
   // fragPosition is world coordinates
   // camera is at 0, 0, 0
   // need a vector from 
-  return vec4<f32>(vec3<f32>(0.2, 1.0, 0.2) * brightness, 1.0);
+  return vec4<f32>(color.xyz * brightness, 1.0);
 }

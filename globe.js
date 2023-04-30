@@ -1,6 +1,7 @@
 import "./gl-matrix.js";
 const mat4 = glMatrix.mat4;
 const vec3 = glMatrix.vec3;
+const vec4 = glMatrix.vec4;
 
 function sphere2cart(point, aboveSea) {
     const lngr = (point.Longitude * Math.PI) / 180;
@@ -18,13 +19,13 @@ function sphere2cart(point, aboveSea) {
     return [-x, z, y];
 }
 
-function createLinesBuffer(device, createLines) {
+function createLinesBuffer(device, r, g, b, createLines) {
     var vertexArray = [];
     function addLine(fromPoint, toPoint, aboveSea) {
         const f = sphere2cart(fromPoint, aboveSea);
         const t = sphere2cart(toPoint, aboveSea);
-        vertexArray.push(f[0], f[1], f[2], 1);
-        vertexArray.push(t[0], t[1], t[2], 1);
+        vertexArray.push(f[0], f[1], f[2], 1, r, g, b, 1);
+        vertexArray.push(t[0], t[1], t[2], 1, r, g, b, 1);
     }
     createLines(addLine)
     const floatVertexArray = new Float32Array(vertexArray);
@@ -39,13 +40,13 @@ function createLinesBuffer(device, createLines) {
 }
 
 function createDebugVertices(device) {
-    return createLinesBuffer(device, addLine => {
+    return createLinesBuffer(device, 1.0, 0.0, 0.0, addLine => {
         addLine({ Longitude: 0, Latitude: 90 }, { Longitude: 0, Latitude: -90 }, 1);
     });
 }
 
 function createLatLngLines(device) {
-    return createLinesBuffer(device, addLine => {
+    return createLinesBuffer(device, 0.0, 0.25, 0.0, addLine => {
         const bigSep = 15;
         const litSep = 1;
         // Draw lines of latitude
@@ -63,35 +64,19 @@ function createLatLngLines(device) {
     });
 }
 
-function loadShpLineVertices(device, shp) {
-    var vertexArray = [];
-    function addLine(fromPoint, toPoint) {
-        const f = sphere2cart(fromPoint, 0);
-        const t = sphere2cart(toPoint, 0);
-        vertexArray.push(f[0], f[1], f[2], 1);
-        vertexArray.push(t[0], t[1], t[2], 1);
-    }
-    for (const record of shp.Records) {
-        const points = record.Points;
-        for (let partI = 0; partI < record.Parts.length; partI++) {
-            const pointStartI = record.Parts[partI];
-            const pointEndI = partI < record.Parts.length - 1 ? record.Parts[partI + 1] : points.length;
-            for (let i = pointStartI; i < pointEndI - 1; i++) {
-                addLine(points[i], points[i + 1]);
+function loadShpLineVertices(device, r, g, b, aboveSea, shp) {
+    return createLinesBuffer(device, r, g, b, addLine => {
+        for (const record of shp.Records) {
+            const points = record.Points;
+            for (let partI = 0; partI < record.Parts.length; partI++) {
+                const pointStartI = record.Parts[partI];
+                const pointEndI = partI < record.Parts.length - 1 ? record.Parts[partI + 1] : points.length;
+                for (let i = pointStartI; i < pointEndI - 1; i++) {
+                    addLine(points[i], points[i + 1], aboveSea);
+                }
             }
         }
-    }
-    const floatVertexArray = new Float32Array(vertexArray);
-
-    // Create a vertex buffer from the cube data.
-    const verticesBuffer = device.createBuffer({
-        size: floatVertexArray.byteLength,
-        usage: GPUBufferUsage.VERTEX,
-        mappedAtCreation: true,
     });
-    new Float32Array(verticesBuffer.getMappedRange()).set(floatVertexArray);
-    verticesBuffer.unmap();
-    return verticesBuffer;
 }
 
 export const init = async (canvas) => {
@@ -121,7 +106,7 @@ export const init = async (canvas) => {
         alphaMode: "premultiplied",
     });
 
-    const vertexSize = 4 * 4; // 4 floats per vertex
+    const vertexSize = 8 * 4; // 8 floats per vertex (postion + color)
 
     const pipeline = device.createRenderPipeline({
         layout: "auto",
@@ -138,6 +123,12 @@ export const init = async (canvas) => {
                             // position
                             shaderLocation: 0,
                             offset: 0,
+                            format: "float32x4",
+                        },
+                        {
+                            // color
+                            shaderLocation: 1,
+                            offset: 16,
                             format: "float32x4",
                         },
                     ],
@@ -171,24 +162,14 @@ export const init = async (canvas) => {
         },
     });
 
-    const uniformBufferSize = 3 * (4 * 4 * 4); // 2 4x4 matrices
+    const uniformBufferSize = 3 * (4 * 4 * 4) + 1 * (4 * 4); // 3 4x4 matrices, 1 vec4
     const uniformBuffer = device.createBuffer({
         size: uniformBufferSize,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
     const bindGroup0UniformLayout = pipeline.getBindGroupLayout(0);
-    const uniformBindGroup = device.createBindGroup({
-        layout: bindGroup0UniformLayout,
-        entries: [
-            {
-                binding: 0,
-                resource: {
-                    buffer: uniformBuffer,
-                },
-            },
-        ],
-    });
+    
 
     const renderPassDescriptor = {
         colorAttachments: [
@@ -210,7 +191,7 @@ export const init = async (canvas) => {
 
     function getTransformationMatrix(t) {
         const viewMatrix = mat4.create();
-        mat4.translate(viewMatrix, viewMatrix, vec3.fromValues(0, 0, -15));
+        mat4.translate(viewMatrix, viewMatrix, vec3.fromValues(0, 0, -13));
         const rotationSpeed = 2.0 * Math.PI / (60.0 * 60.0 * 24.0);
         const axisSpeed = 2.0 * Math.PI / (60.0 * 60.0 * 24.0 * 365.0);
         const timeSpeedup = 1000.0;
@@ -235,14 +216,10 @@ export const init = async (canvas) => {
         return viewMatrix;
     }
 
-    const coastlinesVerticesBuffer = loadShpLineVertices(device, coastlines);
-    const coastlinesVertexCount = coastlinesVerticesBuffer.size / vertexSize;
-    const countriesVerticesBuffer = loadShpLineVertices(device, countries);
-    const countriesVertexCount = countriesVerticesBuffer.size / vertexSize;
+    const coastlinesVerticesBuffer = loadShpLineVertices(device, 0.2, 1.0, 0.2, 0.0002, coastlines);
+    const countriesVerticesBuffer = loadShpLineVertices(device, 0.0, 0.5, 0.0, 0.0001, countries);
     const debugVerticesBuffer = createDebugVertices(device);
-    const debugVertexCount = debugVerticesBuffer.size / vertexSize;
     const latlngVerticesBuffer = createLatLngLines(device);
-    const latlngVertexCount = latlngVerticesBuffer.size / vertexSize;
 
     let renderTarget = undefined;
     let renderTargetView = undefined;
@@ -303,7 +280,7 @@ export const init = async (canvas) => {
 
     // Start rendering time
     const startTime = Date.now() / 1000;
-    
+
     async function frame() {
         resizeBuffersIfNeeded();
         const t = Date.now() / 1000 - startTime;
@@ -344,6 +321,8 @@ export const init = async (canvas) => {
             0,
             16
         );
+
+        device.queue.writeBuffer(uniformBuffer, 3*64, vec4.fromValues(0.0, 0.0, 1.0, 1.0), 0, 4);
         renderPassDescriptor.colorAttachments[0].view = renderTargetView;
         renderPassDescriptor.colorAttachments[0].resolveTarget = context.getCurrentTexture().createView();
         renderPassDescriptor.depthStencilAttachment.view = depthTextureView;
@@ -351,15 +330,29 @@ export const init = async (canvas) => {
         const commandEncoder = device.createCommandEncoder();
         const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
         passEncoder.setPipeline(pipeline);
+        const uniformBindGroup = device.createBindGroup({
+            layout: bindGroup0UniformLayout,
+            entries: [
+                {
+                    binding: 0,
+                    resource: {
+                        buffer: uniformBuffer,
+                    },
+                },
+            ],
+        });
         passEncoder.setBindGroup(0, uniformBindGroup);
-        passEncoder.setVertexBuffer(0, coastlinesVerticesBuffer);
-        passEncoder.draw(coastlinesVertexCount, 1, 0, 0);
-        passEncoder.setVertexBuffer(0, countriesVerticesBuffer);
-        passEncoder.draw(countriesVertexCount, 1, 0, 0);
-        passEncoder.setVertexBuffer(0, debugVerticesBuffer);
-        passEncoder.draw(debugVertexCount, 1, 0, 0);
-        passEncoder.setVertexBuffer(0, latlngVerticesBuffer);
-        passEncoder.draw(latlngVertexCount, 1, 0, 0);
+
+        function drawVerts(verts) {
+            passEncoder.setVertexBuffer(0, verts);
+            passEncoder.draw(verts.size / vertexSize, 1, 0, 0);
+        }
+        
+        drawVerts(coastlinesVerticesBuffer);
+        drawVerts(countriesVerticesBuffer);
+        // drawVerts(debugVerticesBuffer);
+        drawVerts(latlngVerticesBuffer);
+
         passEncoder.end();
         device.queue.submit([commandEncoder.finish()]);
 
