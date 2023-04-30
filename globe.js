@@ -63,6 +63,8 @@ export const init = async (canvas) => {
 
     const context = canvas.getContext("webgpu");
 
+    const sampleCount = 4;
+
     const devicePixelRatio = window.devicePixelRatio || 1;
     canvas.width = canvas.clientWidth * devicePixelRatio;
     canvas.height = canvas.clientHeight * devicePixelRatio;
@@ -73,7 +75,6 @@ export const init = async (canvas) => {
         format: presentationFormat,
         alphaMode: "premultiplied",
     });
-
 
     const vertexSize = 4 * 4; // 4 floats per vertex
 
@@ -120,12 +121,9 @@ export const init = async (canvas) => {
             depthCompare: "less",
             format: "depth24plus",
         },
-    });
-
-    const depthTexture = device.createTexture({
-        size: [canvas.width, canvas.height],
-        format: "depth24plus",
-        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        multisample: {
+            count: sampleCount,
+        },
     });
 
     const uniformBufferSize = 4 * 16; // 4x4 matrix
@@ -157,17 +155,13 @@ export const init = async (canvas) => {
             },
         ],
         depthStencilAttachment: {
-            view: depthTexture.createView(),
+            view: undefined, // Assigned later
 
             depthClearValue: 1.0,
             depthLoadOp: "clear",
             depthStoreOp: "store",
         },
     };
-
-    const aspect = canvas.width / canvas.height;
-    const projectionMatrix = mat4.create();
-    mat4.perspective(projectionMatrix, Math.PI / 20, aspect, 0.1, 100.0);
 
     function getTransformationMatrix(t) {
         const viewMatrix = mat4.create();
@@ -180,6 +174,10 @@ export const init = async (canvas) => {
             vec3.fromValues(0, 1, 0)
         );
 
+        const aspect = canvas.width / canvas.height;
+        const projectionMatrix = mat4.create();
+        mat4.perspective(projectionMatrix, Math.PI / 20, aspect, 0.1, 100.0);
+    
         const modelViewProjectionMatrix = mat4.create();
         mat4.multiply(modelViewProjectionMatrix, projectionMatrix, viewMatrix);
 
@@ -191,10 +189,68 @@ export const init = async (canvas) => {
     const countriesVerticesBuffer = loadShpLineVertices(device, countries);
     const countriesVertexCount = countriesVerticesBuffer.size / vertexSize;
 
+    let renderTarget = undefined;
+    let renderTargetView = undefined;
+    let depthTexture = undefined;
+    let depthTextureView = undefined;
+
+    function resizeBuffersIfNeeded() {
+        let currentWidth = canvas.clientWidth * devicePixelRatio;
+        let currentHeight = canvas.clientHeight * devicePixelRatio;
+        const maxTextureSize = device.limits.maxTextureDimension2D;
+        const scaleX = currentWidth > maxTextureSize ? maxTextureSize / currentWidth : 1;
+        const scaleY = currentHeight > maxTextureSize ? maxTextureSize / currentHeight : 1;
+        const scale = Math.min(scaleX, scaleY);
+        currentWidth *= scale;
+        currentHeight *= scale;
+
+        // The canvas size is animating via CSS.
+        // When the size changes, we need to reallocate the render target.
+        // We also need to set the physical size of the canvas to match the computed CSS size.
+        if ((currentWidth !== canvas.width || currentHeight !== canvas.height || renderTarget === undefined || depthTexture === undefined) &&
+            currentWidth &&
+            currentHeight
+            ) {
+            if (renderTarget !== undefined) {
+                // Destroy the previous render target
+                renderTarget.destroy();
+            }
+            if (depthTexture !== undefined) {
+                // Destroy the previous render target
+                depthTexture.destroy();
+            }
+
+            // Setting the canvas width and height will automatically resize the textures returned
+            // when calling getCurrentTexture() on the context.
+            canvas.width = currentWidth;
+            canvas.height = currentHeight;
+
+            // Resize the multisampled render target to match the new canvas size.
+            renderTarget = device.createTexture({
+                size: [canvas.width, canvas.height],
+                sampleCount,
+                format: presentationFormat,
+                usage: GPUTextureUsage.RENDER_ATTACHMENT,
+            });
+
+            renderTargetView = renderTarget.createView();
+
+            depthTexture = device.createTexture({
+                size: [canvas.width, canvas.height],
+                sampleCount,
+                format: "depth24plus",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT,
+            });
+        
+            depthTextureView = depthTexture.createView();
+        }
+    }
+
     // Start rendering time
     const startTime = Date.now() / 1000;
     
     function frame() {
+        resizeBuffersIfNeeded();
         const t = Date.now() / 1000 - startTime;
         const transformationMatrix = getTransformationMatrix(t);
         device.queue.writeBuffer(
@@ -204,13 +260,12 @@ export const init = async (canvas) => {
             transformationMatrix.byteOffset,
             transformationMatrix.byteLength
         );
-        renderPassDescriptor.colorAttachments[0].view = context
-            .getCurrentTexture()
-            .createView();
+        renderPassDescriptor.colorAttachments[0].view = renderTargetView;
+        renderPassDescriptor.colorAttachments[0].resolveTarget = context.getCurrentTexture().createView();
+        renderPassDescriptor.depthStencilAttachment.view = depthTextureView;
 
         const commandEncoder = device.createCommandEncoder();
-        const passEncoder =
-            commandEncoder.beginRenderPass(renderPassDescriptor);
+        const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
         passEncoder.setPipeline(pipeline);
         passEncoder.setBindGroup(0, uniformBindGroup);
         passEncoder.setVertexBuffer(0, coastlinesVerticesBuffer);
